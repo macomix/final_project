@@ -28,29 +28,56 @@ def high_speed_normalize(vectors: np.ndarray):
     unit_vectors = vectors.transpose()/norms
     return unit_vectors.transpose()
 
-def direction_to_quaternion(direction, up = np.array([0.0, 0.0, 1.0])) -> Quaternion:
+def quaternion_from_vectors(to_vector, from_vector=np.array([1,0,0])):
+    # Ensure the input vectors are normalized
+    from_vector = from_vector / np.linalg.norm(from_vector)
+    to_vector = to_vector / np.linalg.norm(to_vector)
+
+    # Calculate the rotation axis
+    rotation_axis = np.cross(from_vector, to_vector)
+    rotation_axis /= np.linalg.norm(rotation_axis)
+
+    # Calculate the rotation angle
+    rotation_angle = np.arccos(np.dot(from_vector, to_vector))
+
+    # Convert the axis-angle representation to quaternion
+    quaternion = axis_angle_to_quaternion(rotation_axis, rotation_angle)
+
+    return quaternion
+
+def axis_angle_to_quaternion(axis, angle):
+    # Convert the axis-angle representation to quaternion
+    sin_half_angle = np.sin(angle / 2.0)
+    cos_half_angle = np.cos(angle / 2.0)
+
+
+    quaternion = Quaternion()
+    quaternion.x = axis[0] * sin_half_angle
+    quaternion.y = axis[1] * sin_half_angle
+    quaternion.z = axis[2] * sin_half_angle
+    quaternion.w = cos_half_angle
+
+    return quaternion
+
+def direction_to_quaternion(direction, forward_axis = np.array([1.0, 0.0, 0.0])) -> Quaternion:
     """Calculates the rotation as a Quaternion from a simple directional
     vector and the up direction, which is the z-axis in many cases.
 
     Args:
         direction (_type_): directional vector
-        up (_type_, optional): up vector. Defaults to np.array([0.0, 1.0, 0.0]).
+        up (_type_, optional): up vector. Defaults to np.array([0.0, 0.0, 1.0]).
 
     Returns:
         Quaternion: orientation
     """
     # normalize input
-    direction, up = high_speed_normalize(np.array([direction, up]))
+    #direction, up = high_speed_normalize(np.array([direction, up]))
+    direction = direction/np.linalg.norm(direction)
+    forward = forward_axis/np.linalg.norm(forward_axis)
 
-    # calculate the rotation axis
-    right = np.cross(up, direction)
-    right = high_speed_normalize(np.array(right))
-
-    # calculate polar coordinates
-    # q=cos(a/2)+axis*sin(a/2)
-    angle = np.arccos(np.dot(up, direction))
-    axis = right * np.sin(angle/2.0)
-    w = np.cos(angle/2.0)
+     # normalized
+    axis = np.cross(forward, direction)
+    w = np.dot(forward, direction) + 1
 
     quaternion = Quaternion()
     quaternion.x = axis[0]
@@ -198,8 +225,9 @@ class PathPlanner(Node):
         return collision_indices
 
     def find_grid_neighbors(self, position: tuple[int, int]) -> list[tuple[int, int]]:
-        # TODO: check if x is width or height and if you have to do -1
         neighbors = []
+
+        # height: y, width: x
         height: int = self.occupancy_grid.info.height
         width: int = self.occupancy_grid.info.width
         
@@ -232,9 +260,8 @@ class PathPlanner(Node):
         #self.get_logger().info(f'Calculated an A*-segment with a cost of {cost}.')
 
         worldPath = multiple_matrix_indeces_to_world(matrixPath, self.cell_size)
-        self.get_logger().debug(f'Points in A*-segment: {len(worldPath)}.')
 
-        # TODO: maybe add last point again separate roation
+        # TODO: maybe add last point again separate rotation
 
         z0 = p0.position.z
         z1 = p1.position.z
@@ -252,7 +279,11 @@ class PathPlanner(Node):
             direction = np.array([worldPath[i+1][0]-worldPath[i][0], 
                                   worldPath[i+1][1]-worldPath[i][1],
                                   0])
-            orientations.append(direction_to_quaternion(direction))
+            #q = direction_to_quaternion(direction)
+            q = quaternion_from_vectors(direction)
+            orientations.append(q)
+            #_, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+            #self.get_logger().info(f"yaw: {np.rad2deg(yaw)}")
             
         orientations.append(p1.orientation)
 
