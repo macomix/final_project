@@ -24,18 +24,29 @@ class State(Enum):
     NORMAL_OPERATION = auto()
 
 def high_speed_normalize(vectors: np.ndarray):
+    # normalizing huge amount of vectors in a short time
     norms = np.sqrt(np.einsum('...i,...i', vectors, vectors))
     unit_vectors = vectors.transpose()/norms
     return unit_vectors.transpose()
 
-def quaternion_from_vectors(to_vector, from_vector=np.array([1,0,0])):
-    # Ensure the input vectors are normalized
-    from_vector = from_vector / np.linalg.norm(from_vector)
-    to_vector = to_vector / np.linalg.norm(to_vector)
+def quaternion_from_vectors(to_vector: np.ndarray, from_vector=np.array([1,0,0])) -> Quaternion:
+    """Outputs the quaternion which describes the rotation 
+    from one vector to another vector.
+
+    Args:
+        to_vector (np.ndarray): the end 3d vector
+        from_vector (_type_, optional): the reference 3d vector. Defaults to np.array([1,0,0]).
+
+    Returns:
+        Quaternion: orientation
+    """
+    # normalize input vectors
+    from_vector, to_vector = high_speed_normalize(np.array([from_vector, to_vector]))
 
     # Calculate the rotation axis
     rotation_axis = np.cross(from_vector, to_vector)
-    rotation_axis /= np.linalg.norm(rotation_axis)
+    if np.array_equal(rotation_axis, np.zeros(3)) == False:
+        rotation_axis /= np.linalg.norm(rotation_axis)
 
     # Calculate the rotation angle
     rotation_angle = np.arccos(np.dot(from_vector, to_vector))
@@ -50,7 +61,6 @@ def axis_angle_to_quaternion(axis, angle):
     sin_half_angle = np.sin(angle / 2.0)
     cos_half_angle = np.cos(angle / 2.0)
 
-
     quaternion = Quaternion()
     quaternion.x = axis[0] * sin_half_angle
     quaternion.y = axis[1] * sin_half_angle
@@ -58,35 +68,6 @@ def axis_angle_to_quaternion(axis, angle):
     quaternion.w = cos_half_angle
 
     return quaternion
-
-def direction_to_quaternion(direction, forward_axis = np.array([1.0, 0.0, 0.0])) -> Quaternion:
-    """Calculates the rotation as a Quaternion from a simple directional
-    vector and the up direction, which is the z-axis in many cases.
-
-    Args:
-        direction (_type_): directional vector
-        up (_type_, optional): up vector. Defaults to np.array([0.0, 0.0, 1.0]).
-
-    Returns:
-        Quaternion: orientation
-    """
-    # normalize input
-    #direction, up = high_speed_normalize(np.array([direction, up]))
-    direction = direction/np.linalg.norm(direction)
-    forward = forward_axis/np.linalg.norm(forward_axis)
-
-     # normalized
-    axis = np.cross(forward, direction)
-    w = np.dot(forward, direction) + 1
-
-    quaternion = Quaternion()
-    quaternion.x = axis[0]
-    quaternion.y = axis[1]
-    quaternion.z = axis[2]
-    quaternion.w = w
-
-    return quaternion
-
 
 def occupancy_grid_to_matrix(grid: OccupancyGrid) -> np.ndarray:
     data = np.array(grid.data, dtype=np.uint8)
@@ -150,8 +131,8 @@ class PathPlanner(Node):
         self.viewpoints = []
         self.waypoints = []
         self.orientations = []
-        self.occupancy_grid: OccupancyGrid = None
-        self.occupancy_matrix: np.ndarray = None
+        self.occupancy_grid: OccupancyGrid = None # type: ignore
+        self.occupancy_matrix: np.ndarray = np.empty(1)
         self.progress = -1.0
         self.remaining_segments = []
         self.init_clients()
@@ -171,7 +152,7 @@ class PathPlanner(Node):
                                                 self.serve_stop)
 
     def init_clients(self):
-        cb_group = rclpy.callback_groups.MutuallyExclusiveCallbackGroup()
+        cb_group = rclpy.callback_groups.MutuallyExclusiveCallbackGroup() # type: ignore
         self.set_path_client = self.create_client(SetPath,
                                                   'path_follower/set_path',
                                                   callback_group=cb_group)
@@ -270,20 +251,18 @@ class PathPlanner(Node):
             Point(x=p[0], y=p[1], z=z0 + i * z_step)
             for i, p in enumerate(worldPath)
         ]
-        # Replace the last point with the exact value stored in p1.position
+        # replace the last point with the exact value stored in p1.position
         # instead of the grid map discretized world coordinate
         points_3d[-1] = p1.position
 
+        # add rotations
         orientations = []
         for i in range(len(worldPath)-1):
             direction = np.array([worldPath[i+1][0]-worldPath[i][0], 
                                   worldPath[i+1][1]-worldPath[i][1],
                                   0])
-            #q = direction_to_quaternion(direction)
             q = quaternion_from_vectors(direction)
             orientations.append(q)
-            #_, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            #self.get_logger().info(f"yaw: {np.rad2deg(yaw)}")
             
         orientations.append(p1.orientation)
 
@@ -641,6 +620,7 @@ class PathPlanner(Node):
         self.set_new_path_future = self.set_path_client.call_async(request)
         return True
 
+    # NOTE wtf is going on here:
     def publish_path_marker(self, segments):
         msg = self.path_marker
         world_points = self.segments_to_world_points(segments)

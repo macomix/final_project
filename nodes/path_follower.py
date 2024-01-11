@@ -19,17 +19,28 @@ class PathFollower(Node):
     def __init__(self):
         super().__init__(node_name='path_follower')
         self.init_services()
+
+        # publisher
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped,
                                                  'vision_pose_cov',
                                                  self.on_pose, 1)
-        self.yaw_pub = self.create_publisher(Float64Stamped,
-                                             'yaw_controller/setpoint', 1)
-        self.position_pub = self.create_publisher(
-            PointStamped, 'position_controller/setpoint', 1)
+        
+        self.yaw_pub = self.create_publisher(Float64Stamped, 'yaw_controller/setpoint', 1)
+
+        self.position_pub = self.create_publisher(PointStamped, 'position_controller/setpoint', 1)
+        
         self.path_pub = self.create_publisher(Path, '~/current_path', 1)
+
+        # debug publisher
+        self.target_orientation_pub = self.create_publisher(
+            PoseStamped,
+            'target_orientation',
+            qos_profile=1
+        )
+
         self.look_ahead_distance = 0.3
         self.target_index = 0
-        self.path: list[PoseStamped] = None
+        self.path: list[PoseStamped] = None # type: ignore
 
     def init_services(self):
         self.set_path_service = self.create_service(SetPath, '~/set_path',
@@ -46,7 +57,7 @@ class PathFollower(Node):
         return response
 
     def serve_path_finished(self, request, response: Trigger.Response):
-        self.path = None
+        self.path = None # type: ignore
         response.success = True
         self.get_logger().info('Path finished. Going to idle mode.')
         return response
@@ -60,20 +71,20 @@ class PathFollower(Node):
 
         stamp = self.get_clock().now().to_msg()
 
-        msg = Float64Stamped()
-        msg.data = self.target_yaw
-        msg.header.stamp = stamp
-        msg.header.frame_id = 'map'
-        self.yaw_pub.publish(msg)
+        msg_yaw = Float64Stamped()
+        msg_yaw.data = self.target_yaw
+        msg_yaw.header.stamp = stamp
+        msg_yaw.header.frame_id = 'map'
+        self.yaw_pub.publish(msg_yaw)
 
-        msg = PointStamped(header=msg.header, point=self.target_position)
-        self.position_pub.publish(msg)
+        msg_point = PointStamped(header=msg_yaw.header, point=self.target_position)
+        self.position_pub.publish(msg_point)
         if self.path:
-            msg = Path()
-            msg.header.frame_id = 'map'
-            msg.header.stamp = stamp
-            msg.poses = self.path
-            self.path_pub.publish(msg)
+            msg_point = Path()
+            msg_point.header.frame_id = 'map'
+            msg_point.header.stamp = stamp
+            msg_point.poses = self.path
+            self.path_pub.publish(msg_point)
 
     def update_setpoint(self, current_pose: Pose):
         current_position = current_pose.position
@@ -97,10 +108,22 @@ class PathFollower(Node):
                 self.target_index = len(self.path) - 1
                 break
         target_pose = self.path[self.target_index].pose
+        self.publish_target_pose(target_pose) # to display arrow in rviz
+
         self.target_position = target_pose.position
         q = target_pose.orientation
         _, _, self.target_yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
         return True
+    
+    def publish_target_pose(self, target_pose: Pose):
+        msg = PoseStamped()
+
+        stamp = self.get_clock().now().to_msg()
+
+        msg.pose = target_pose
+        msg.header.stamp = stamp
+        msg.header.frame_id = 'map'
+        self.target_orientation_pub.publish(msg)
 
 
 def main():
