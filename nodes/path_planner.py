@@ -23,6 +23,43 @@ class State(Enum):
     MOVE_TO_START = auto()
     NORMAL_OPERATION = auto()
 
+def high_speed_normalize(vectors: np.ndarray):
+    norms = np.sqrt(np.einsum('...i,...i', vectors, vectors))
+    unit_vectors = vectors.transpose()/norms
+    return unit_vectors.transpose()
+
+def direction_to_quaternion(direction, up = np.array([0.0, 0.0, 1.0])) -> Quaternion:
+    """Calculates the rotation as a Quaternion from a simple directional
+    vector and the up direction, which is the z-axis in many cases.
+
+    Args:
+        direction (_type_): directional vector
+        up (_type_, optional): up vector. Defaults to np.array([0.0, 1.0, 0.0]).
+
+    Returns:
+        Quaternion: orientation
+    """
+    # normalize input
+    direction, up = high_speed_normalize(np.array([direction, up]))
+
+    # calculate the rotation axis
+    right = np.cross(up, direction)
+    right = high_speed_normalize(np.array(right))
+
+    # calculate polar coordinates
+    # q=cos(a/2)+axis*sin(a/2)
+    angle = np.arccos(np.dot(up, direction))
+    axis = right * np.sin(angle/2.0)
+    w = np.cos(angle/2.0)
+
+    quaternion = Quaternion()
+    quaternion.x = axis[0]
+    quaternion.y = axis[1]
+    quaternion.z = axis[2]
+    quaternion.w = w
+
+    return quaternion
+
 
 def occupancy_grid_to_matrix(grid: OccupancyGrid) -> np.ndarray:
     data = np.array(grid.data, dtype=np.uint8)
@@ -34,11 +71,11 @@ def world_to_matrix(x: float, y: float, grid_size: float) -> tuple[int, int]:
     return round(x / grid_size), round(y / grid_size)
 
 
-def matrix_index_to_world(x, y, grid_size):
+def matrix_index_to_world(x: int, y: int, grid_size: float):
     return [x * grid_size, y * grid_size]
 
 
-def multiple_matrix_indeces_to_world(points, grid_size):
+def multiple_matrix_indeces_to_world(points: list[tuple[int, int]], grid_size: float):
     world_points = []
     for point in points:
         world_points.append([point[0] * grid_size, point[1] * grid_size])
@@ -170,7 +207,7 @@ class PathPlanner(Node):
             x2 = position[0] + dx
             y2 = position[1] + dy
             # check if neighbor is outside the map
-            if x2 < 0 or x2 > height or y2 < 0 or y2 > width:
+            if x2 < 0 or x2 > width-1 or y2 < 0 or y2 > height-1:
                 continue
             neighbors.append((x2, y2))
             
@@ -184,8 +221,55 @@ class PathPlanner(Node):
             dist = np.asarray(posA) - np.asarray(posB)
             return np.linalg.norm(dist).astype(float)
 
+    def compute_a_star_segment(self, p0: Pose, p1: Pose):
+        # calculate the position on the 2d grid map
+        startPos = world_to_matrix(p0.position.x, p0.position.y, self.cell_size)
+        endPos = world_to_matrix(p1.position.x, p1.position.y, self.cell_size)
+
+        # TODO: maybe make sure startPos != endPos
+        
+        matrixPath, cost = self.compute_a_star(startPos, endPos)
+        #self.get_logger().info(f'Calculated an A*-segment with a cost of {cost}.')
+
+        worldPath = multiple_matrix_indeces_to_world(matrixPath, self.cell_size)
+        self.get_logger().debug(f'Points in A*-segment: {len(worldPath)}.')
+
+        # TODO: maybe add last point again separate roation
+
+        z0 = p0.position.z
+        z1 = p1.position.z
+        z_step = (z1 - z0) / (len(worldPath) - 1)
+        points_3d = [
+            Point(x=p[0], y=p[1], z=z0 + i * z_step)
+            for i, p in enumerate(worldPath)
+        ]
+        # Replace the last point with the exact value stored in p1.position
+        # instead of the grid map discretized world coordinate
+        points_3d[-1] = p1.position
+
+        orientations = []
+        for i in range(len(worldPath)-1):
+            direction = np.array([worldPath[i+1][0]-worldPath[i][0], 
+                                  worldPath[i+1][1]-worldPath[i][1],
+                                  0])
+            orientations.append(direction_to_quaternion(direction))
+            
+        orientations.append(p1.orientation)
+
+        ####
+        collision_indices = []
+        path = Path()
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = 'map'
+        path.poses = [
+            PoseStamped(header=header, pose=Pose(position=p, orientation=q))
+            for p, q in zip(points_3d, orientations)
+        ]
+        return {'path': path, 'collision_indices': collision_indices}
+
     
-    def compute_a_star_segment(self, p0: Pose, p1: Pose) -> tuple[list, float]:
+    def compute_a_star(self, startPos: tuple[int, int], endPos: tuple[int, int]) -> tuple[list[tuple[int, int]], float]:
         """A*-algorithm:
         - pathfinder 
         - graph search
@@ -195,16 +279,12 @@ class PathPlanner(Node):
         https://rosettacode.org/wiki/A*_search_algorithm#Python
 
         Args:
-            p0 (Pose): start pose
-            p1 (Pose): end pose
+            startPos (tuple[int, int]): start position on matrix map
+            endPos (tuple[int, int]): end position on matrix map
 
         Returns:
-            list(), float: path and cost of that path
+            list, float: path and cost
         """
-        # calculate the position on the 2d grid map
-        startPos = world_to_matrix(p0.position.x, p0.position.y, self.cell_size)
-        endPos = world_to_matrix(p1.position.x, p1.position.y, self.cell_size)
-
         gScore = {} # cost of each position to the starting position
         fScore = {} # estimated cost of cheapest path from start to end using specific position
 
@@ -229,6 +309,8 @@ class PathPlanner(Node):
                     current_fScore = fScore[pos]
                     currentPos = pos
 
+            if not currentPos: continue # make sure currentPos is set
+
             # check if the end pose is reached
             if currentPos == endPos:
                 # if the end is reached make the path
@@ -240,7 +322,6 @@ class PathPlanner(Node):
                 return path, fScore[endPos]
                 
             # transfer current Node from open set to closed set
-            if not currentPos: continue # make sure currentPos is set
             openNodes.remove(currentPos)
             closedNodes.add(currentPos)
 
@@ -420,11 +501,11 @@ class PathPlanner(Node):
         # the path piecewise between the viewpoints
         path_segments = []
         for i in range(1, len(viewpoint_poses)):
-            segment = self.compute_simple_path_segment(viewpoint_poses[i - 1],
-                                                       viewpoint_poses[i])
+            # segment = self.compute_simple_path_segment(viewpoint_poses[i - 1],
+            #                                            viewpoint_poses[i])
             # alternatively call your own implementation
-            # segment = self.compute_a_star_segment(viewpoint_poses[i - 1],
-            #                                       viewpoint_poses[i])
+            segment = self.compute_a_star_segment(viewpoint_poses[i - 1],
+                                                  viewpoint_poses[i])
             path_segments.append(segment)
         return path_segments
 
