@@ -24,14 +24,14 @@ class State(Enum):
     NORMAL_OPERATION = auto()
 
 
-def occupancy_grid_to_matrix(grid: OccupancyGrid):
+def occupancy_grid_to_matrix(grid: OccupancyGrid) -> np.ndarray:
     data = np.array(grid.data, dtype=np.uint8)
     data = data.reshape(grid.info.height, grid.info.width)
     return data
 
 
-def world_to_matrix(x, y, grid_size):
-    return [round(x / grid_size), round(y / grid_size)]
+def world_to_matrix(x: float, y: float, grid_size: float) -> tuple[int, int]:
+    return round(x / grid_size), round(y / grid_size)
 
 
 def matrix_index_to_world(x, y, grid_size):
@@ -45,7 +45,7 @@ def multiple_matrix_indeces_to_world(points, grid_size):
     return world_points
 
 
-def compute_discrete_line(x0, y0, x1, y1):
+def compute_discrete_line(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
     dx = abs(x1 - x0)
     sx = 1 if x0 < x1 else -1
     dy = -abs(y1 - y0)
@@ -56,7 +56,7 @@ def compute_discrete_line(x0, y0, x1, y1):
     y = y0
     points = []
     while True:
-        points.append([int(x), int(y)])
+        points.append((int(x), int(y)))
         if x == x1 and y == y1:
             break
         doubled_error = 2 * error
@@ -71,7 +71,6 @@ def compute_discrete_line(x0, y0, x1, y1):
             error += dx
             y += +sy
     return points
-
 
 class PathPlanner(Node):
 
@@ -127,7 +126,7 @@ class PathPlanner(Node):
                                               request.target_pose)
         return response
 
-    def move_to_start(self, p0: Pose, p1: Pose):
+    def move_to_start(self, p0: Pose, p1: Pose) -> bool:
         path_segment = self.compute_simple_path_segment(p0,
                                                         p1,
                                                         check_collision=False)
@@ -143,7 +142,16 @@ class PathPlanner(Node):
                 'But the path follower did not accept the new path.')
             return False
 
-    def has_collisions(self, points_2d):
+    def has_collisions(self, points_2d: list[tuple[int, int]]) -> list[int]:
+        """Checks if any point2d is inside a object and therefore 
+        colliding. In that case the index of that point in the list will be returned.
+
+        Args:
+            points_2d (list[tuple[int, int]]): list of 2d points
+
+        Returns:
+            list(int): indices of points with collision
+        """
         if not self.occupancy_grid:
             return []
         collision_indices = [
@@ -152,15 +160,135 @@ class PathPlanner(Node):
         ]
         return collision_indices
 
-    def compute_a_star_segment(self, p0: Pose, p1: Pose):
-        # TODO: implement your algorithms
-        # you probably need the gridmap: self.occupancy_grid
-        pass
+    def find_grid_neighbors(self, position: tuple[int, int]) -> list[tuple[int, int]]:
+        # TODO: check if x is width or height and if you have to do -1
+        neighbors = []
+        height: int = self.occupancy_grid.info.height
+        width: int = self.occupancy_grid.info.width
+        
+        for dx, dy in [(1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,1),(1,-1),(-1,-1)]:
+            x2 = position[0] + dx
+            y2 = position[1] + dy
+            # check if neighbor is outside the map
+            if x2 < 0 or x2 > height or y2 < 0 or y2 > width:
+                continue
+            neighbors.append((x2, y2))
+            
+        return neighbors
+    
+    def move_cost(self, posA: tuple[int, int], posB: tuple[int, int]) -> float:
+        if self.has_collisions([posA, posB]):
+            # if move leads to collision return a high move cost
+            return 1000
+        else:
+            dist = np.asarray(posA) - np.asarray(posB)
+            return np.linalg.norm(dist).astype(float)
 
-    def compute_simple_path_segment(self,
-                                    p0: Pose,
-                                    p1: Pose,
-                                    check_collision=True):
+    
+    def compute_a_star_segment(self, p0: Pose, p1: Pose) -> tuple[list, float]:
+        """A*-algorithm:
+        - pathfinder 
+        - graph search
+        - horrendous O(b^d) complexity
+
+        Code based on: 
+        https://rosettacode.org/wiki/A*_search_algorithm#Python
+
+        Args:
+            p0 (Pose): start pose
+            p1 (Pose): end pose
+
+        Returns:
+            list(), float: path and cost of that path
+        """
+        # calculate the position on the 2d grid map
+        startPos = world_to_matrix(p0.position.x, p0.position.y, self.cell_size)
+        endPos = world_to_matrix(p1.position.x, p1.position.y, self.cell_size)
+
+        gScore = {} # cost of each position to the starting position
+        fScore = {} # estimated cost of cheapest path from start to end using specific position
+
+        # initialize
+        gScore[startPos] = 0
+        fScore[startPos] = self.heuristic_cost_2d(startPos, endPos)
+
+        # set of nodes we need to check
+        closedNodes = set()
+        openNodes = set([startPos])
+        cameFrom = {} # the node before the current node on the cheapest path
+
+
+        while len(openNodes) > 0:
+            currentPos = None
+            current_fScore = None
+
+            # for every node available check if there is
+            # a node with a lower F score
+            for pos in openNodes:
+                if currentPos is None or fScore[pos] < current_fScore:
+                    current_fScore = fScore[pos]
+                    currentPos = pos
+
+            # check if the end pose is reached
+            if currentPos == endPos:
+                # if the end is reached make the path
+                path = [currentPos]
+                while currentPos in cameFrom:
+                    currentPos = cameFrom[currentPos]
+                    path.append(currentPos)
+                path.reverse()
+                return path, fScore[endPos]
+                
+            # transfer current Node from open set to closed set
+            if not currentPos: continue # make sure currentPos is set
+            openNodes.remove(currentPos)
+            closedNodes.add(currentPos)
+
+            # update scores surrounding the current position
+            for neighbor in self.find_grid_neighbors(currentPos):
+                if neighbor in closedNodes:
+                    # this node was already computed
+                    continue
+
+                # this might be the next best node
+                candidate_gScore = gScore[currentPos] + self.move_cost(currentPos, neighbor)
+
+                if neighbor not in openNodes:
+                    # new node discovered
+                    openNodes.add(neighbor)
+                elif candidate_gScore >= gScore[neighbor]:
+                    # we already found a faster path to the position of neighbor
+                    continue
+
+                # add valuable information
+                cameFrom[neighbor] = currentPos
+                gScore[neighbor] = candidate_gScore
+                hCost = self.heuristic_cost_2d(neighbor, endPos)
+                fScore[neighbor] = gScore[neighbor] + hCost
+
+        raise RuntimeError("A* failed to find a solution")
+
+    def heuristic_cost_2d(self, start: tuple[int, int], goal: tuple[int, int]) -> float:
+        """This is a heuristic function which is supposed to calculate the cost
+        to reach a goal based on limited knowledge. 
+        There are different ways to calculate our heuristic:
+            - Manhatten distance
+            - Straight-line (current method of choice)
+            - Octile distance
+            - Chebyshev distance
+            - ...
+
+        Args:
+            start (int): start position on 2d grid
+            goal (int): end position on 2d grid
+
+        Returns:
+            float: estimated cost
+        """
+        dist = np.asarray(start) - np.asarray(goal)
+        return np.linalg.norm(dist).astype(float)
+
+    def compute_simple_path_segment(self, p0: Pose, p1: Pose, check_collision=True):
         p0_2d = world_to_matrix(p0.position.x, p0.position.y, self.cell_size)
         p1_2d = world_to_matrix(p1.position.x, p1.position.y, self.cell_size)
         # now we should/could apply some sophisticated algorithm to compute

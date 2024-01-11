@@ -18,5 +18,6 @@
         "/home/martin/fav/ros2_underlay/install/hippo_common/lib/python3.10/site-packages",
         "/home/martin/fav/ros2_underlay/install/hippo_msgs/lib/python3.10/site-packages",
         "/opt/ros/iron/lib/python3.10/site-packages"
-    ]
+    ],
+    "python.analysis.typeCheckingMode": "basic"
 }
