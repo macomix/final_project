@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import math
+import numpy as np
+from scipy import signal
 
 import rclpy
 from geometry_msgs.msg import Point, PointStamped, PoseWithCovarianceStamped
@@ -14,15 +16,21 @@ class PositionController(Node):
     def __init__(self):
         super().__init__(node_name='position_controller')
 
-        self.thrust_pub = self.create_publisher(ActuatorSetpoint,
-                                                'thrust_setpoint', 1)
-        self.position_setpoint_sub = self.create_subscription(
-            PointStamped, '~/setpoint', self.on_position_setpoint, 1)
+        # publisher
+        self.thrust_pub = self.create_publisher(ActuatorSetpoint,'thrust_setpoint', 1)
+        self.position_setpoint_sub = self.create_subscription(PointStamped, 
+            '~/setpoint', 
+            self.on_position_setpoint, 
+            qos_profile=1)
+        
         self.setpoint = Point()
         self.setpoint_timed_out = True
+
+        # subscriber
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped,
                                                  'vision_pose_cov',
                                                  self.on_pose, 1)
+        
         self.timeout_timer = self.create_timer(0.5, self.on_setpoint_timeout)
         self.pose_counter = 0
 

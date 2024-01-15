@@ -16,9 +16,12 @@ class MapperNode(Node):
     def __init__(self):
         super().__init__(node_name='mapper')
 
-        self.tank_size_x = None
-        self.tank_size_y = None
-        self.cell_resolution = None
+        # makes the obstacles bigger to account for robot size
+        self.obstacle_distance: float = 0.5
+
+        self.tank_size_x: float = 0
+        self.tank_size_y: float = 0
+        self.cell_resolution: float = 0
         self.init_params()
 
         self.num_cells_x = int(np.round(self.tank_size_x /
@@ -43,6 +46,7 @@ class MapperNode(Node):
             f'resulting in {self.num_cells_x} cells in x-direction and ' +
             f'{self.num_cells_y} cells in y-direction.')
 
+        # publisher
         self.map_pub = self.create_publisher(msg_type=OccupancyGrid,
                                              topic='occupancy_grid',
                                              qos_profile=1)
@@ -52,6 +56,7 @@ class MapperNode(Node):
             topic='/occupancy_grid_uninflated',
             qos_profile=1)
 
+        # subscriber
         self.obstacle_sub = self.create_subscription(msg_type=PolygonsStamped,
                                                      topic='obstacles',
                                                      callback=self.on_obstacles,
@@ -65,15 +70,18 @@ class MapperNode(Node):
                 ('tank_size_y', rclpy.Parameter.Type.DOUBLE),
                 ('cell_resolution', rclpy.Parameter.Type.DOUBLE),
             ])
+        
         param = self.get_parameter('tank_size_x')
         self.get_logger().info(f'{param.name}={param.value}')
-        self.tank_size_x = param.value
+        self.tank_size_x = param.get_parameter_value().double_value
+
         param = self.get_parameter('tank_size_y')
         self.get_logger().info(f'{param.name}={param.value}')
-        self.tank_size_y = param.value
+        self.tank_size_y = param.get_parameter_value().double_value
+
         param = self.get_parameter('cell_resolution')
         self.get_logger().info(f'{param.name}={param.value}')
-        self.cell_resolution = param.value
+        self.cell_resolution = param.get_parameter_value().double_value
 
     def on_obstacles(self, msg: PolygonsStamped):
         num_obstacles = len(msg.polygons)
@@ -116,7 +124,7 @@ class MapperNode(Node):
         img = cells.astype(dtype='uint8')
 
         # We're inflating the obstacles by ca. 30cm in this example  # TODO
-        dilatation_size = int(np.round(0.3 / self.cell_resolution))
+        dilatation_size = int(np.round(self.obstacle_distance / self.cell_resolution))
 
         # We will use a circular kernel, feel free to try other kernel shapes
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
