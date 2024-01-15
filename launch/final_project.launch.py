@@ -19,6 +19,7 @@ def generate_launch_description() -> LaunchDescription:
 
     package_path = get_package_share_path('final_project')
     mapping_params_file_path = str(package_path / 'config/mapping_params.yaml')
+    pid_params_file_path = str(package_path / 'config/pid_controller_params.yaml')
 
     scenario_arg = DeclareLaunchArgument(
         name='scenario',
@@ -57,11 +58,17 @@ def generate_launch_description() -> LaunchDescription:
                 },
             ],
         ),
-        Node(executable='position_controller.py',
-             package='final_project',
-             parameters=[{
-                 'use_sim_time': LaunchConfiguration('use_sim_time'),
-             }]),
+        Node(
+            executable='position_controller.py',
+            package='final_project',
+            parameters=[
+                LaunchConfiguration('pid_params_file_path',
+                                    default=pid_params_file_path),
+                {
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                },
+            ],
+        ),
         Node(
             executable='yaw_controller.py',
             package='final_project',
