@@ -60,8 +60,6 @@ class PositionController(Node):
         self.init_params()
         self.add_on_set_parameters_callback(self.on_params_changed)
 
-        self.get_logger().info(f'{self.gains_x}')
-
         #
         self.cutoff = 40.0 # cutoff frequency for low pass filter
         self.last_filter_estimate= np.zeros(3) # low pass
@@ -162,10 +160,18 @@ class PositionController(Node):
 
         thrust = np.zeros(3)
         error = np.array([self.setpoint.x-position.x, self.setpoint.y-position.y, self.setpoint.z-position.z])
-        error_change = np.zeros(3)
+        derivative_error = np.zeros(3)
+
+        # shrink down very big error vectors to limit speed
+        # error_size = np.linalg.norm(error).astype(float)
+        # max_error_size = 0.3
+        # if error_size > max_error_size:
+        #     error = max_error_size * error/error_size
+        # error_change = np.zeros(3)
+
+        # sort out abnormal dt
         if dt != 0:
             error_change = (error - self.last_error)/dt
-        derivative_error = np.zeros(3)
         
         for i in range(3):
             if dt != 0:

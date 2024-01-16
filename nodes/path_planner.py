@@ -380,9 +380,9 @@ class PathPlanner(Node):
 
         # TODO: maybe make sure startPos != endPos
         
-        #matrixPath, cost = self.compute_a_star(startPos, endPos)
-        matrixPath, cost = self.compute_theta_star(startPos, endPos)
-        #self.get_logger().info(f'Calculated an A*-segment with a cost of {cost}.')
+        matrixPath, cost = self.compute_a_star(startPos, endPos)
+        #matrixPath, cost = self.compute_theta_star(startPos, endPos)
+        # current problem with theta star: rov cant stay on path
 
         worldPath = multiple_matrix_indeces_to_world(matrixPath, self.cell_size)
 
