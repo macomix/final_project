@@ -230,6 +230,149 @@ class PathPlanner(Node):
             dist = np.asarray(posA) - np.asarray(posB)
             return np.linalg.norm(dist).astype(float)
 
+    def line_of_sight(self, node1: tuple[int, int], node2: tuple[int, int]) -> bool:
+        # for theta star
+        x0, y0 = node1
+        x1, y1 = node2
+        dx = abs(x1 - x0)
+        dy = -abs(y1 -y0)
+
+        sX = -1
+        sY = -1
+        if x0 < x1:
+            sX = 1
+        if y0 < y1:
+            sY = 1
+
+        height: int = self.occupancy_grid.info.height
+        width: int = self.occupancy_grid.info.width
+
+        e = dx + dy
+        while True:
+            # check if node still exists
+            if x0 < 0 or x0 > width-1 or y0 < 0 or y0 > height-1:
+                return False
+
+            if self.occupancy_matrix[y0, x0] >= 50:
+                return False
+            
+            # check if nodes are the same
+            if x0==x1 and y0 == y1:
+                return True
+            
+            e2 = 2*e
+            if e2 >= dy:
+                if x0 == x1:
+                    return True
+                e += dy
+                x0 += sX
+            
+            if e2 <= dx:
+                if y0 == y1:
+                    return True
+                e += dx
+                y0 += sY
+
+    def reconstruct_path(self, node: tuple[int, int], cameFrom: dict) -> list[tuple[int, int]]:
+        # recursively reconstruct path
+        path: list[tuple[int, int]] = [node]
+        if cameFrom[node] != node:
+            path.extend(self.reconstruct_path(cameFrom[node], cameFrom))
+
+        return path
+        
+    def compute_theta_star(self, startPos: tuple[int, int], endPos: tuple[int, int]) -> tuple[list[tuple[int, int]], float]:
+        """Theta*-algorithm:
+        - real shortest path
+
+        Args:
+            startPos (tuple[int, int]): start position on matrix map
+            endPos (tuple[int, int]): end position on matrix map
+
+        Returns:
+            list, float: path and cost
+        """
+        gScore = {} # cost of each position to the starting position
+        fScore = {} # estimated cost of cheapest path from start to end using specific position
+
+        # initialize
+        gScore[startPos] = 0
+        fScore[startPos] = self.heuristic_cost_2d(startPos, endPos)
+
+        # set of nodes we need to check
+        closedNodes = set()
+        openNodes = set([startPos])
+        cameFrom = {} # the node before the current node on the cheapest path
+        cameFrom[startPos] = startPos
+
+
+        while len(openNodes) > 0:
+            currentPos = None
+            current_fScore = None
+
+            # for every node available check if there is
+            # a node with a lower F score
+            for pos in openNodes:
+                if currentPos is None or fScore[pos] < current_fScore:
+                    current_fScore = fScore[pos]
+                    currentPos = pos
+
+            if not currentPos: continue # make sure currentPos is set
+
+            # check if the end pose is reached
+            if currentPos == endPos:
+                # if the end is reached make the path
+                path = self.reconstruct_path(currentPos, cameFrom)
+                path.reverse()
+                return path, fScore[endPos]
+                
+            # transfer current Node from open set to closed set
+            openNodes.remove(currentPos)
+            closedNodes.add(currentPos)
+
+            # update scores surrounding the current position
+            for neighbor in self.find_grid_neighbors(currentPos):
+                if neighbor in closedNodes:
+                    continue
+
+                if neighbor not in openNodes:
+                    # initialize values for neighbor on discovery
+                    openNodes.add(neighbor)
+                    gScore[neighbor] = 1000000 # init very high
+                    fScore[neighbor] = 1000000
+                    cameFrom[neighbor] = currentPos
+                
+                # update node
+                parent = cameFrom[currentPos]
+                if self.line_of_sight(parent, neighbor):
+                    # if there is a line of sight between the parent node
+                    # and the neighbor then ignore currentPos
+                    candidate_gScore = gScore[parent] + self.move_cost(parent, neighbor)
+                    if candidate_gScore < gScore[neighbor]:
+                        # add new point information
+                        gScore[neighbor] = candidate_gScore
+                        cameFrom[neighbor] = parent
+                        hCost = self.heuristic_cost_2d(neighbor, endPos)
+                        fScore[neighbor] = gScore[neighbor] + hCost
+
+                # # this might be the next best node
+                # candidate_gScore = gScore[currentPos] + self.move_cost(currentPos, neighbor)
+
+                # if neighbor not in openNodes:
+                #     # new node discovered
+                #     openNodes.add(neighbor)
+                # elif candidate_gScore >= gScore[neighbor]:
+                #     # we already found a faster path to the position of neighbor
+                #     continue
+
+                # # add valuable information
+                # cameFrom[neighbor] = currentPos
+                # gScore[neighbor] = candidate_gScore
+                # hCost = self.heuristic_cost_2d(neighbor, endPos)
+                # fScore[neighbor] = gScore[neighbor] + hCost
+
+        raise RuntimeError("Theta* failed to find a solution")
+
     def compute_a_star_segment(self, p0: Pose, p1: Pose):
         # calculate the position on the 2d grid map
         startPos = world_to_matrix(p0.position.x, p0.position.y, self.cell_size)
@@ -237,7 +380,8 @@ class PathPlanner(Node):
 
         # TODO: maybe make sure startPos != endPos
         
-        matrixPath, cost = self.compute_a_star(startPos, endPos)
+        #matrixPath, cost = self.compute_a_star(startPos, endPos)
+        matrixPath, cost = self.compute_theta_star(startPos, endPos)
         #self.get_logger().info(f'Calculated an A*-segment with a cost of {cost}.')
 
         worldPath = multiple_matrix_indeces_to_world(matrixPath, self.cell_size)
@@ -277,7 +421,6 @@ class PathPlanner(Node):
             for p, q in zip(points_3d, orientations)
         ]
         return {'path': path, 'collision_indices': collision_indices}
-
     
     def compute_a_star(self, startPos: tuple[int, int], endPos: tuple[int, int]) -> tuple[list[tuple[int, int]], float]:
         """A*-algorithm:
