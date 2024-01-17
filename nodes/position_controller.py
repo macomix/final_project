@@ -53,15 +53,15 @@ class PositionController(Node):
     def __init__(self):
         super().__init__(node_name='position_controller')
 
-        # gains
+        # init parameters from config file
         self.gains_x = np.zeros(3)
         self.gains_y = np.zeros(3)
         self.gains_z = np.zeros(3)
+        self.cutoff = 0.0 # cutoff frequency for low pass filter
         self.init_params()
         self.add_on_set_parameters_callback(self.on_params_changed)
 
         #
-        self.cutoff = 40.0 # cutoff frequency for low pass filter
         self.last_filter_estimate= np.zeros(3) # low pass
         self.last_error = np.zeros(3)
         self.error_integral = np.zeros(3)
@@ -158,8 +158,10 @@ class PositionController(Node):
         if dt > 1:
             dt = 0.0
 
+        
         thrust = np.zeros(3)
         error = np.array([self.setpoint.x-position.x, self.setpoint.y-position.y, self.setpoint.z-position.z])
+        
         derivative_error = np.zeros(3)
 
         # shrink down very big error vectors to limit speed
@@ -167,15 +169,17 @@ class PositionController(Node):
         # max_error_size = 0.3
         # if error_size > max_error_size:
         #     error = max_error_size * error/error_size
-        # error_change = np.zeros(3)
+        
+        error_change = np.zeros(3)
 
-        # sort out abnormal dt
+        # TODO: fix deltaTime calculations
         if dt != 0:
             error_change = (error - self.last_error)/dt
         
         for i in range(3):
             if dt != 0:
                 derivative_error[i] = low_pass_filter(self.last_filter_estimate[i], error_change[i], cutoff=self.cutoff, dt=dt)
+                self.last_filter_estimate[i] = derivative_error[i]
 
             # integral
             if np.abs(error[i]) < 0.05:
