@@ -742,8 +742,7 @@ class PathPlanner(Node):
             return
 
         # compute new path
-        sorted_viewpoints = self.get_viewpoints_in_order(viewpoints=viewpoints)
-        path_segments = self.compute_new_path(sorted_viewpoints)
+        path_segments = self.compute_new_path(viewpoints)
         if not path_segments:
             self.get_logger().error(
                 'This is a logic error. The cases that would have lead to '
@@ -769,9 +768,12 @@ class PathPlanner(Node):
             # corresponding service was called
             return
         if self.state == State.NORMAL_OPERATION:
+            # NOTE this is called very often so maybe improve performance by only calling
+            # this function on state change?
             # put it in a nice and pretty python list
             viewpoints = [v for v in msg.viewpoints]
-            self.do_normal_operation(viewpoints=viewpoints)
+            sorted_viewpoints = self.get_viewpoints_in_order(viewpoints=viewpoints)
+            self.do_normal_operation(viewpoints=sorted_viewpoints)
 
     def find_first_uncompleted_viewpoint(self, viewpoints: list[Viewpoint]):
         for i, viewpoint in enumerate(viewpoints):
