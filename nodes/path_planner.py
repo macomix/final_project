@@ -8,7 +8,7 @@ from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from nav_msgs.msg import OccupancyGrid, Path
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from scenario_msgs.msg import Viewpoints
+from scenario_msgs.msg import Viewpoints, Viewpoint
 from scenario_msgs.srv import MoveToStart, SetPath
 from std_msgs.msg import Header
 from std_srvs.srv import Trigger
@@ -22,6 +22,20 @@ class State(Enum):
     IDLE = auto()
     MOVE_TO_START = auto()
     NORMAL_OPERATION = auto()
+
+def norm_pose(p0: Pose, p1: Pose) -> float:
+    """Calculates the distance between two points.
+
+    Args:
+        p0 (Pose): position A
+        p1 (Pose): position B
+
+    Returns:
+        float: distance
+    """
+    pos0 = np.array([p0.position.x, p0.position.y, p0.position.z])
+    pos1 = np.array([p1.position.x, p1.position.y, p1.position.z])
+    return np.linalg.norm((pos0-pos1)).astype(float)
 
 def high_speed_normalize(vectors: np.ndarray):
     # normalizing huge amount of vectors in a short time
@@ -127,7 +141,9 @@ class PathPlanner(Node):
         self.target_viewpoint_index = -1
         self.path_marker: Marker
         self.init_path_marker()
+
         self.path_marker_pub = self.create_publisher(Marker, '~/marker', 1)
+
         self.viewpoints = []
         self.waypoints = []
         self.orientations = []
@@ -137,6 +153,11 @@ class PathPlanner(Node):
         self.remaining_segments = []
         self.init_clients()
         self.init_services()
+
+        # to sort the viewpoints
+        self.last_viewpoint_i = 0 # start viewpoint is 0 by definition
+
+        # subscriber
         self.grid_map_sub = self.create_subscription(OccupancyGrid,
                                                      'occupancy_grid',
                                                      self.on_occupancy_grid, 1)
@@ -188,8 +209,8 @@ class PathPlanner(Node):
             return False
 
     def has_collisions(self, points_2d: list[tuple[int, int]]) -> list[int]:
-        """Checks if any point2d is inside a object and therefore 
-        colliding. In that case the index of that point in the list will be returned.
+        """Checks if any point is colliding with an obstacle. 
+        In that case the index of that point in the list will be returned.
 
         Args:
             points_2d (list[tuple[int, int]]): list of 2d points
@@ -354,22 +375,6 @@ class PathPlanner(Node):
                         cameFrom[neighbor] = parent
                         hCost = self.heuristic_cost_2d(neighbor, endPos)
                         fScore[neighbor] = gScore[neighbor] + hCost
-
-                # # this might be the next best node
-                # candidate_gScore = gScore[currentPos] + self.move_cost(currentPos, neighbor)
-
-                # if neighbor not in openNodes:
-                #     # new node discovered
-                #     openNodes.add(neighbor)
-                # elif candidate_gScore >= gScore[neighbor]:
-                #     # we already found a faster path to the position of neighbor
-                #     continue
-
-                # # add valuable information
-                # cameFrom[neighbor] = currentPos
-                # gScore[neighbor] = candidate_gScore
-                # hCost = self.heuristic_cost_2d(neighbor, endPos)
-                # fScore[neighbor] = gScore[neighbor] + hCost
 
         raise RuntimeError("Theta* failed to find a solution")
 
@@ -624,41 +629,73 @@ class PathPlanner(Node):
             return
         self.state = State.IDLE
 
-    def compute_new_path(self, viewpoints: Viewpoints):
+    def get_viewpoints_in_order(self, viewpoints: list[Viewpoint]) -> list[Viewpoint]:
+        """This function sorts viewpoints by euclidean distance.
+
+        Args:
+            viewpoints (Viewpoints): list of viewpoints
+
+        Raises:
+            RuntimeError: Unable to sort viewpoints.
+
+        Returns:
+            list[Viewpoint]: sorted viewpoints
+        """
+        # TODO convert this function to CallByReference
+        
+        # sorts viewpoints by euclidean distance
+
+        # get all available viewpoints
+        # viewpoints should be uncompleted except for the first one
+        viewpoints_unsorted = viewpoints # we have to make a copy to avoid changes to the argument
+
+        viewpoints_sorted = []
+
+        # start viewpoint will always have index 0
+        last_viewpoint: Viewpoint = viewpoints_unsorted.pop(0)
+        viewpoints_sorted.append(last_viewpoint)
+
+        while viewpoints_unsorted:
+            distance = None
+            candidate = None
+
+            # check which viewpoint is closest to the current one
+            for i, viewpoint in enumerate(viewpoints_unsorted):
+                distance_candidate = norm_pose(last_viewpoint.pose, viewpoint.pose)
+                if not distance or distance_candidate < distance:
+                    distance = distance_candidate
+                    candidate = i
+
+            if candidate is None:
+                raise RuntimeError("Unable to sort viewpoints.")
+            
+            last_viewpoint = viewpoints_unsorted.pop(candidate)
+            viewpoints_sorted.append(last_viewpoint)
+
+        return viewpoints_sorted
+
+    def compute_new_path(self, viewpoints: list[Viewpoint]):
         i = self.find_first_uncompleted_viewpoint(viewpoints)
-        # start position and is treated differently.
+        
+        # the start position is i=0
+        # the start position should be completed before
+        # calling this function so
+        # this function should only receive i>=1
         if i < 1:
             return
-        # complete them all.
-        # We do nothing smart here. We keep the order in which we received
-        # the waypoints and connect them by straight lines.
-        # No collision avoidance.
-        # We only perform a collision detection and give up in case that
-        # our path of straight lines collides with anything.
-        # Not very clever, eh?
 
-        # now get the remaining uncompleted viewpoints. In general, we can
-        # assume that all the following viewpoints are uncompleted, since
-        # we complete them in the same order as we get them in the
-        # viewpoints message. But it is not that hard to double-check it.
+        # get the remaining uncompleted viewpoints
         viewpoint_poses = [
-            v.pose for v in viewpoints.viewpoints[i:] if not v.completed
+            v.pose for v in viewpoints[i:] if not v.completed
         ]
-        # get the most recently visited viewpoint. Since we do not change
-        # the order of the viewpoints, this will be the viewpoint right
-        # before the first uncompleted viewpoint in the list, i.e. i-1
-        p0 = viewpoints.viewpoints[i - 1].pose
+        # get the most recently visited viewpoint
+        p0 = viewpoints[i - 1].pose
         viewpoint_poses.insert(0, p0)
 
-        # now we can finally call our super smart function to compute
-        # the path piecewise between the viewpoints
+        # compute the path piecewise between the viewpoints
         path_segments = []
         for i in range(1, len(viewpoint_poses)):
-            # segment = self.compute_simple_path_segment(viewpoint_poses[i - 1],
-            #                                            viewpoint_poses[i])
-            # alternatively call your own implementation
-            segment = self.compute_a_star_segment(viewpoint_poses[i - 1],
-                                                  viewpoint_poses[i])
+            segment = self.compute_a_star_segment(viewpoint_poses[i - 1], viewpoint_poses[i])
             path_segments.append(segment)
         return path_segments
 
@@ -670,23 +707,31 @@ class PathPlanner(Node):
         else:
             self.state = State.UNSET
 
-    def do_normal_operation(self, viewpoints: Viewpoints):
-        # what we need to do:
-        # - check if the viewpoints changed, if so, recalculate the path
+    def do_normal_operation(self, viewpoints: list[Viewpoint]):
+        """This function starts the path planning. 
+        It will be called upon the event:
+        self.on_viewpoints
+
+        Args:
+            viewpoints (Viewpoints): list of viewpoints
+        """
+        # if the viewpoints changed recalculate the path
         i = self.find_first_uncompleted_viewpoint(viewpoints)
-        # we completed our mission!
+
+        # we completed our mission
         if i < 0:
             self.handle_mission_completed()
             return
 
-        if (not self.recomputation_required
-            ) or self.target_viewpoint_index == i:
-            # we are still chasing the same viewpoint. Nothing to do.
+        # we are still chasing the same viewpoint
+        if (not self.recomputation_required) or self.target_viewpoint_index == i:
             return
+        
+        # NOTE: no clue what this does
         self.get_logger().info('Computing new path segments')
         self.target_viewpoint_index = i
         if i == 0:
-            p = viewpoints.viewpoints[0].pose
+            p = viewpoints[0].pose
             if not self.move_to_start(p, p):
                 self.get_logger().fatal(
                     'Could not move to first viewpoint. Giving up...')
@@ -696,7 +741,9 @@ class PathPlanner(Node):
                     self.state = State.UNSET
             return
 
-        path_segments = self.compute_new_path(viewpoints)
+        # compute new path
+        sorted_viewpoints = self.get_viewpoints_in_order(viewpoints=viewpoints)
+        path_segments = self.compute_new_path(sorted_viewpoints)
         if not path_segments:
             self.get_logger().error(
                 'This is a logic error. The cases that would have lead to '
@@ -722,13 +769,15 @@ class PathPlanner(Node):
             # corresponding service was called
             return
         if self.state == State.NORMAL_OPERATION:
-            self.do_normal_operation(msg)
+            # put it in a nice and pretty python list
+            viewpoints = [v for v in msg.viewpoints]
+            self.do_normal_operation(viewpoints=viewpoints)
 
-    def find_first_uncompleted_viewpoint(self, viewpoints: Viewpoints):
-        for i, viewpoint in enumerate(viewpoints.viewpoints):
+    def find_first_uncompleted_viewpoint(self, viewpoints: list[Viewpoint]):
+        for i, viewpoint in enumerate(viewpoints):
             if not viewpoint.completed:
                 return i
-        # This should not happen!
+        # in the case that every viewpoint is completed:
         return -1
 
     def on_occupancy_grid(self, msg: OccupancyGrid):
