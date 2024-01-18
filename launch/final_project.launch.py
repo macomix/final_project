@@ -73,6 +73,8 @@ def generate_launch_description() -> LaunchDescription:
             executable='yaw_controller.py',
             package='final_project',
             parameters=[
+                LaunchConfiguration('pid_params_file_path',
+                                    default=pid_params_file_path),
                 {
                     'use_sim_time': LaunchConfiguration('use_sim_time'),
                 },

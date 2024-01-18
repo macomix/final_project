@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 import math
+import numpy as np
 
 import rclpy
+from rcl_interfaces.msg import SetParametersResult
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from hippo_msgs.msg import ActuatorSetpoint, Float64Stamped
 from rclpy.node import Node
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from tf_transformations import euler_from_quaternion
 
+def low_pass_filter(x: float, y_old: float, cutoff: float, 
+                    dt: rclpy.time.Time) -> float: # type: ignore
+    alpha = dt/(dt + 1/(2*np.pi*cutoff))
+    y = x * alpha + (1- alpha)*y_old
+    return y
 
 class YawController(Node):
 
@@ -20,6 +27,18 @@ class YawController(Node):
         # default value for the yaw setpoint
         self.setpoint = math.pi / 2.0
         self.setpoint_timed_out = True
+
+        # init parameters from config file
+        self.gains_yaw = np.zeros(3)
+        self.cutoff = 20.0 # cutoff frequency for low pass filter
+        self.init_params()
+        self.add_on_set_parameters_callback(self.on_params_changed)
+
+        #
+        self.last_filter_estimate= 0 # low pass
+        self.last_error = 0
+        self.error_integral = 0
+        self.last_time = self.get_clock().now().nanoseconds * 10e-9
 
         self.vision_pose_sub = self.create_subscription(
             msg_type=PoseWithCovarianceStamped,
@@ -36,6 +55,32 @@ class YawController(Node):
                                                 topic='torque_setpoint',
                                                 qos_profile=1)
 
+    def init_params(self):
+        # load params from config
+        self.declare_parameters(namespace='',
+                                parameters=[
+                                    ("gains_yaw", rclpy.Parameter.Type.DOUBLE_ARRAY),
+                                    ("cutoff", rclpy.Parameter.Type.DOUBLE)
+                                             ])
+        
+        param = self.get_parameter('gains_yaw')
+        self.gains_yaw = param.get_parameter_value().double_array_value
+
+        param = self.get_parameter('cutoff')
+        self.cutoff = param.get_parameter_value().double_value
+
+    def on_params_changed(self, params):
+        param: rclpy.Parameter
+        for param in params:
+            self.get_logger().info(f'Try to set [{param.name}] = {param.value}')
+            if param.name == 'gains_yaw':
+                self.gains_yaw = param.get_parameter_value().double_array_value
+            elif param.name == 'cutoff':
+                self.cutoff = param.get_parameter_value().double_value
+            else:
+                continue
+        return SetParametersResult(successful=True, reason='Parameter set')
+    
     def on_setpoint_timeout(self):
         self.timeout_timer.cancel()
         self.get_logger().warn('Setpoint timed out. Waiting for new setpoints')
@@ -66,18 +111,41 @@ class YawController(Node):
         #yaw = self.wrap_pi(yaw)
 
         control_output = self.compute_control_output(yaw)
-        timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
+        timestamp = rclpy.time.Time.from_msg(msg.header.stamp) # type: ignore
         self.publish_control_output(control_output, timestamp)
 
     def compute_control_output(self, yaw):
+        now = self.get_clock().now()
+        dt = now.nanoseconds * 10e-9 - self.last_time
+
+        p_gain, i_gain, d_gain = self.gains_yaw
+
+        # sort out all abnormal dt
+        if dt > 1:
+            dt = 0.0
+
         # very important: normalize the angle error!
         error = self.wrap_pi(self.setpoint - yaw)
+        derivative_error = 0
+        integral_error = 0
+        
+        # derivative
+        if dt != 0:
+            error_change = (error - self.last_error)/dt
+            derivative_error = low_pass_filter(self.last_filter_estimate, error_change, cutoff=self.cutoff, dt=dt)
+            self.last_filter_estimate = derivative_error
 
-        p_gain = 0.1  # turned out to be a good value
-        return p_gain * error
+        # integral
+        if np.abs(error) < 0.05:
+            self.error_integral = self.error_integral + dt * error
+        else:
+            self.error_integral = 0
+
+        
+        return p_gain * error + i_gain * integral_error + d_gain * derivative_error
 
     def publish_control_output(self, control_output: float,
-                               timestamp: rclpy.time.Time):
+                               timestamp: rclpy.time.Time): # type: ignore
         msg = ActuatorSetpoint()
         msg.header.stamp = timestamp.to_msg()
         msg.ignore_x = True
