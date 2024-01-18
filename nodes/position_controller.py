@@ -10,6 +10,7 @@ from geometry_msgs.msg import Point, PointStamped, PoseWithCovarianceStamped, Ve
 from hippo_msgs.msg import ActuatorSetpoint
 from rclpy.node import Node
 from tf_transformations import euler_from_quaternion
+from std_msgs.msg import Bool
 
 from final_project.msg import PIDStamped2
 
@@ -61,6 +62,10 @@ class PositionController(Node):
         self.init_params()
         self.add_on_set_parameters_callback(self.on_params_changed)
 
+        # gain factor
+        self.close: bool = False
+        self.close_gain: float = 0.7
+
         #
         self.last_filter_estimate= np.zeros(3) # low pass
         self.last_error = np.zeros(3)
@@ -69,10 +74,15 @@ class PositionController(Node):
 
         # publisher
         self.thrust_pub = self.create_publisher(ActuatorSetpoint,'thrust_setpoint', 1)
+
+        # subscriber
         self.position_setpoint_sub = self.create_subscription(PointStamped, 
             '~/setpoint', 
             self.on_position_setpoint, 
             qos_profile=1)
+        
+        self.distance_toggle_sub = self.create_subscription(
+            Bool, '~/distance_toggle', self.on_distance_toggle, 1)
         
         self.setpoint = Point()
         self.setpoint_timed_out = True
@@ -148,9 +158,17 @@ class PositionController(Node):
         #_, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
         self.apply_control(position, q)
 
+    def on_distance_toggle(self, msg: Bool):
+        self.close = msg.data
+
     def apply_control(self, position: Point, quaternion: Quaternion):
         now = self.get_clock().now()
         gain = np.array([self.gains_x, self.gains_y, self.gains_z])
+
+        # if near target viewpoint then slow down
+        if self.close:
+            gain[0,0] *= self.close_gain # x p-gain
+            gain[1,0] *= self.close_gain # y p-gain
 
         dt = self.get_clock().now().nanoseconds * 10e-9 - self.last_time
 

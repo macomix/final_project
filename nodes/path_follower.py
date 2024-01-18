@@ -12,6 +12,8 @@ from rclpy.node import Node
 from scenario_msgs.srv import SetPath
 from std_srvs.srv import Trigger
 from tf_transformations import euler_from_quaternion
+from std_msgs.msg import Bool
+import numpy as np
 
 
 class PathFollower(Node):
@@ -19,6 +21,9 @@ class PathFollower(Node):
     def __init__(self):
         super().__init__(node_name='path_follower')
         self.init_services()
+
+        # distance from viewpoint before slowing down
+        self.toggle_distance: float = 0.8
 
         # publisher
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped,
@@ -30,6 +35,8 @@ class PathFollower(Node):
         self.position_pub = self.create_publisher(PointStamped, 'position_controller/setpoint', 1)
         
         self.path_pub = self.create_publisher(Path, '~/current_path', 1)
+
+        self.distance_toggle_pub = self.create_publisher(Bool, 'position_controller/distance_toggle', 1)
 
         # debug publisher
         self.target_orientation_pub = self.create_publisher(
@@ -86,7 +93,16 @@ class PathFollower(Node):
             msg_point.poses = self.path
             self.path_pub.publish(msg_point)
 
-    def update_setpoint(self, current_pose: Pose):
+    def update_setpoint(self, current_pose: Pose) -> bool:
+        """Check which point in the path is currently ahead 
+        and set that point as the target setpoint.
+
+        Args:
+            current_pose (Pose): input position
+
+        Returns:
+            bool: returns false if path is empty
+        """
         current_position = current_pose.position
         index = self.target_index
         look_ahead_square = self.look_ahead_distance**2
@@ -107,6 +123,27 @@ class PathFollower(Node):
             if index >= len(self.path):
                 self.target_index = len(self.path) - 1
                 break
+        
+        # slow down near target viewpoint
+        target_position = np.array([self.path[-1].pose.position.x,
+                                    self.path[-1].pose.position.y,
+                                    self.path[-1].pose.position.z])
+        
+        current_position = np.array([current_position.x,
+                                     current_position.y,
+                                     current_position.z])
+        
+        distance = np.linalg.norm((target_position-current_position)).astype(float)
+
+        msg_bool = Bool()
+        if distance < self.toggle_distance:
+            msg_bool.data = True
+        else:
+            msg_bool.data = False
+        
+        self.distance_toggle_pub.publish(msg_bool)
+
+        #
         target_pose = self.path[self.target_index].pose
         self.publish_target_pose(target_pose) # to display arrow in rviz
 
