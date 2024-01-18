@@ -815,12 +815,12 @@ class PathPlanner(Node):
         return True
 
     # NOTE wtf is going on here:
-    def publish_path_marker(self, segments):
-        msg = self.path_marker
-        world_points = self.segments_to_world_points(segments)
-        msg.points = [Point(x=p[0], y=p[1], z=-0.5) for p in world_points]
-        msg.header.stamp = self.get_clock().now().to_msg()
-        self.path_marker_pub.publish(msg)
+    # def publish_path_marker(self, segments):
+    #     msg = self.path_marker
+    #     world_points = self.segments_to_world_points(segments)
+    #     msg.points = [Point(x=p[0], y=p[1], z=-0.5) for p in world_points]
+    #     msg.header.stamp = self.get_clock().now().to_msg()
+    #     self.path_marker_pub.publish(msg)
 
 
 def main():
