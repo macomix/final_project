@@ -64,7 +64,7 @@ class PositionController(Node):
 
         # gain factor
         self.close: bool = False
-        self.close_gain: float = 0.7
+        self.close_gain: float = 0.8
 
         #
         self.last_filter_estimate= np.zeros(3) # low pass
@@ -200,7 +200,7 @@ class PositionController(Node):
                 self.last_filter_estimate[i] = derivative_error[i]
 
             # integral
-            if np.abs(error[i]) < 0.05:
+            if np.abs(error[i]) < 0.2:
                 self.error_integral[i] = self.error_integral[i] + dt * error[i]
             else:
                 self.error_integral[i] = 0

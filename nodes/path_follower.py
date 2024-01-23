@@ -23,7 +23,7 @@ class PathFollower(Node):
         self.init_services()
 
         # distance from viewpoint before slowing down
-        self.toggle_distance: float = 0.8
+        self.toggle_distance: float = 1.0
 
         # publisher
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped,
