@@ -120,6 +120,7 @@ class YawController(Node):
 
         p_gain, i_gain, d_gain = self.gains_yaw
 
+        #self.get_logger().info(f"error yaw: {self.get_clock().now()}, yaw integral: {self.error_integral}")
         # sort out all abnormal dt
         if dt > 1:
             dt = 0.0
@@ -127,7 +128,6 @@ class YawController(Node):
         # very important: normalize the angle error!
         error = self.wrap_pi(self.setpoint - yaw)
         derivative_error = 0
-        integral_error = 0
         
         # derivative
         if dt != 0:
@@ -136,13 +136,12 @@ class YawController(Node):
             self.last_filter_estimate = derivative_error
 
         # integral
-        if np.abs(error) < 0.05:
-            self.error_integral = self.error_integral + dt * error
-        else:
-            self.error_integral = 0
+        self.error_integral = self.error_integral + dt * error
 
+        self.last_error = error
+        self.last_time = now.nanoseconds * 10e-9
         
-        return p_gain * error + i_gain * integral_error + d_gain * derivative_error
+        return p_gain * error + i_gain * self.error_integral + d_gain * derivative_error
 
     def publish_control_output(self, control_output: float,
                                timestamp: rclpy.time.Time): # type: ignore
