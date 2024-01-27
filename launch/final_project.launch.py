@@ -6,27 +6,33 @@ from launch.actions import (
     DeclareLaunchArgument,
     GroupAction,
 )
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
+
+from launch.conditions import IfCondition
 
 
 def generate_launch_description() -> LaunchDescription:
     launch_description = LaunchDescription()
-    arg = DeclareLaunchArgument('vehicle_name')
-    launch_description.add_action(arg)
 
-    arg = DeclareLaunchArgument('use_sim_time')
-    launch_description.add_action(arg)
+    # add command line arguments
+    arg_vehicle_name = DeclareLaunchArgument('vehicle_name')
+    launch_description.add_action(arg_vehicle_name)
 
-    package_path = get_package_share_path('final_project')
-    mapping_params_file_path = str(package_path / 'config/mapping_params.yaml')
-    pid_params_file_path = str(package_path / 'config/pid_controller_params.yaml')
+    arg_use_sim_time = DeclareLaunchArgument('use_sim_time')
+    launch_description.add_action(arg_use_sim_time)
 
-    scenario_arg = DeclareLaunchArgument(
+    arg_scenario = DeclareLaunchArgument(
         name='scenario',
         default_value=str(1),
         description='The number of the scenario')
-    launch_description.add_action(scenario_arg)
+    launch_description.add_action(arg_scenario)
 
+    # add config files
+    package_path = get_package_share_path('final_project')
+    mapping_params_file_path = str(package_path / 'config/mapping_params.yaml')
+    pid_params_file_path = str(package_path / 'config/pid_controller_params_sim.yaml')
+
+    # create nodes
     group = GroupAction([
         PushROSNamespace(LaunchConfiguration('vehicle_name')),
         Node(
@@ -101,8 +107,9 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ])
     launch_description.add_action(group)
-    rviz_file = str(
-        get_package_share_path('final_project') / 'config/rviz.rviz')
+
+    # add rviz file
+    rviz_file = str(get_package_share_path('final_project') / 'config/rviz_sim.rviz')
 
     action = Node(
         executable='rviz2',

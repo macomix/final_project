@@ -16,6 +16,9 @@ def low_pass_filter(x: float, y_old: float, cutoff: float,
     y = x * alpha + (1- alpha)*y_old
     return y
 
+def clamp(number: float, smallest: float, largest: float) -> float:
+    return max(smallest, min(number, largest))
+
 class YawController(Node):
 
     def __init__(self):
@@ -34,6 +37,9 @@ class YawController(Node):
         self.init_params()
         self.add_on_set_parameters_callback(self.on_params_changed)
 
+        # maybe put in config
+        self.output_saturation: float = 0.2
+
         #
         self.last_filter_estimate= 0 # low pass
         self.last_error = 0
@@ -51,9 +57,14 @@ class YawController(Node):
                                                      qos_profile=qos)
         self.timeout_timer = self.create_timer(0.5, self.on_setpoint_timeout)
 
+        # publisher
         self.torque_pub = self.create_publisher(msg_type=ActuatorSetpoint,
                                                 topic='torque_setpoint',
                                                 qos_profile=1)
+        
+        self.yaw_pub = self.create_publisher(msg_type=Float64Stamped,
+                                             topic='current_yaw',
+                                             qos_profile=1)
 
     def init_params(self):
         # load params from config
@@ -108,7 +119,13 @@ class YawController(Node):
         q = msg.pose.pose.orientation
         # convert the quaternion to euler angles
         (roll, pitch, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
-        #yaw = self.wrap_pi(yaw)
+        yaw = self.wrap_pi(yaw)
+
+        # publish yaw for debug reasons
+        msg_yaw = Float64Stamped()
+        msg_yaw.header = msg.header
+        msg_yaw.data = yaw
+        self.yaw_pub.publish(msg_yaw)
 
         control_output = self.compute_control_output(yaw)
         timestamp = rclpy.time.Time.from_msg(msg.header.stamp) # type: ignore
@@ -120,12 +137,12 @@ class YawController(Node):
 
         p_gain, i_gain, d_gain = self.gains_yaw
 
-        #self.get_logger().info(f"error yaw: {self.get_clock().now()}, yaw integral: {self.error_integral}")
         # sort out all abnormal dt
         if dt > 1:
             dt = 0.0
 
         # very important: normalize the angle error!
+        #self.get_logger().info(f"from: {yaw} to: {self.setpoint}")
         error = self.wrap_pi(self.setpoint - yaw)
         derivative_error = 0
         
@@ -138,10 +155,21 @@ class YawController(Node):
         # integral
         self.error_integral = self.error_integral + dt * error
 
+        # conditional integrator clamping
+        # if error and integrator have a different sign
+        # turn integrator off
+        if (error * self.error_integral) < 0:
+            self.error_integral = 0
+
+        # saturation
+        thrust = p_gain * error + i_gain * self.error_integral + d_gain * derivative_error
+        thrust = clamp(thrust, -self.output_saturation, self.output_saturation)
+
+        # update
         self.last_error = error
         self.last_time = now.nanoseconds * 10e-9
         
-        return p_gain * error + i_gain * self.error_integral + d_gain * derivative_error
+        return thrust
 
     def publish_control_output(self, control_output: float,
                                timestamp: rclpy.time.Time): # type: ignore

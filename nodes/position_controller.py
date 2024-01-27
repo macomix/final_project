@@ -49,6 +49,9 @@ def low_pass_filter(x: float, y_old: float, cutoff: float,
     y = x * alpha + (1- alpha)*y_old
     return y
 
+def clamp(number: float, smallest: float, largest: float) -> float:
+    return max(smallest, min(number, largest))
+
 class PositionController(Node):
 
     def __init__(self):
@@ -65,6 +68,9 @@ class PositionController(Node):
         # gain factor
         self.close: bool = False
         self.close_gain: float = 0.8
+
+        self.integral_threshold: float = 0.2 # in m
+        self.output_saturation: float = 1.0
 
         #
         self.last_filter_estimate= np.zeros(3) # low pass
@@ -199,14 +205,26 @@ class PositionController(Node):
                 derivative_error[i] = low_pass_filter(self.last_filter_estimate[i], error_change[i], cutoff=self.cutoff, dt=dt)
                 self.last_filter_estimate[i] = derivative_error[i]
 
-            # integral
-            if np.abs(error[i]) < 0.2:
-                self.error_integral[i] = self.error_integral[i] + dt * error[i]
-            else:
+            # integrator
+            self.error_integral[i] = self.error_integral[i] + dt * error[i]
+
+            # PID calculation
+            thrust[i] = error[i] * gain[i, 0] + self.error_integral[i] * gain[i, 1] + derivative_error[i] * gain[i, 2]
+
+            # conditional integrator
+            # if error too still very big or
+            # if output is saturated and the integrator makes it worse
+            # turn off integrator
+            if np.abs(error[i]) > self.integral_threshold or (np.abs(thrust[i]) > self.output_saturation 
+                                                              and (error[i] * self.error_integral[i]) < 0):
                 self.error_integral[i] = 0
+                thrust[i] = error[i] * gain[i, 0] + derivative_error[i] * gain[i, 2]
+
+            # output saturation
+            thrust[i] = clamp(thrust[i], -self.output_saturation, self.output_saturation)
         
         # final PID calculation!
-        thrust = error * gain[:, 0] + self.error_integral * gain[:, 1] + derivative_error * gain[:, 2]
+        #thrust = error * gain[:, 0] + self.error_integral * gain[:, 1] + derivative_error * gain[:, 2]
 
         # convert to local space of the robot
         q=np.array([quaternion.w,quaternion.x,quaternion.y,quaternion.z])

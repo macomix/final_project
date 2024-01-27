@@ -19,5 +19,8 @@
         "/home/martin/fav/ros2_underlay/install/hippo_msgs/lib/python3.10/site-packages",
         "/opt/ros/iron/lib/python3.10/site-packages"
     ],
-    "python.analysis.typeCheckingMode": "basic"
+    "python.analysis.typeCheckingMode": "basic",
+    "cSpell.words": [
+        "rviz"
+    ]
 }
