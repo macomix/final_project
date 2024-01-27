@@ -4,7 +4,7 @@ import numpy as np
 
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
 from hippo_msgs.msg import ActuatorSetpoint, Float64Stamped
 from rclpy.node import Node
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
@@ -19,6 +19,57 @@ def low_pass_filter(x: float, y_old: float, cutoff: float,
 def clamp(number: float, smallest: float, largest: float) -> float:
     return max(smallest, min(number, largest))
 
+
+def quaternion_conjugate(q: np.ndarray):
+    """
+    Compute the conjugate of a quaternion.
+
+    Parameters:
+    - q (numpy array): Input quaternion [w, x, y, z].
+
+    Returns:
+    - numpy array: Conjugate of the input quaternion.
+    """
+    return np.array([q[0], -q[1], -q[2], -q[3]])
+
+def quaternion_inverse(q):
+    """
+    Compute the inverse of a quaternion.
+
+    Parameters:
+    - q (numpy array): Input quaternion [w, x, y, z].
+
+    Returns:
+    - numpy array: Inverse of the input quaternion.
+    """
+    norm_sq = np.dot(q, q)
+    if norm_sq == 0:
+        raise ValueError("Quaternion has zero norm, inverse undefined.")
+    conjugate = quaternion_conjugate(q)
+    return conjugate / norm_sq
+
+def quaternion_product(quaternion1, quaternion2):
+    """
+    Compute the Kronecker product of two quaternions.
+
+    Parameters:
+    - q1 (numpy array): First quaternion [w1, x1, y1, z1].
+    - q2 (numpy array): Second quaternion [w2, x2, y2, z2].
+
+    Returns:
+    - numpy array: Kronecker product of the input quaternions.
+    """
+    p0, p1, p2, p3 = quaternion1
+    q0, q1, q2, q3 = quaternion2
+
+    product = np.array([
+        p0*q0 - p1*q1 - p2*q2 - p3*q3,
+        p0*q1 + p1*q0 + p2*q3 - p3*q2,
+        p0*q2 - p1*q3 + p2*q0 + p3*q1,
+        p0*q3 + p1*q2 - p2*q1 + p3*q0
+    ])
+    return product
+
 class YawController(Node):
 
     def __init__(self):
@@ -30,6 +81,8 @@ class YawController(Node):
         # default value for the yaw setpoint
         self.setpoint = math.pi / 2.0
         self.setpoint_timed_out = True
+
+        self.setpoint_q = np.zeros(4) # w,x,y,z
 
         # init parameters from config file
         self.gains_yaw = np.zeros(3)
@@ -51,11 +104,18 @@ class YawController(Node):
             topic='vision_pose_cov',
             callback=self.on_vision_pose,
             qos_profile=qos)
+        
         self.setpoint_sub = self.create_subscription(Float64Stamped,
                                                      topic='~/setpoint',
                                                      callback=self.on_setpoint,
                                                      qos_profile=qos)
         self.timeout_timer = self.create_timer(0.5, self.on_setpoint_timeout)
+
+        self.target_quaternion_sub = self.create_subscription(
+            PoseStamped,
+            topic='target_orientation',
+            callback=self.on_target_orientation,
+            qos_profile=qos)
 
         # publisher
         self.torque_pub = self.create_publisher(msg_type=ActuatorSetpoint,
@@ -97,6 +157,10 @@ class YawController(Node):
         self.get_logger().warn('Setpoint timed out. Waiting for new setpoints')
         self.setpoint_timed_out = True
 
+    def on_target_orientation(self, msg: PoseStamped):
+        q = msg.pose.orientation
+        self.setpoint_q = np.array([q.w,q.x,q.y,q.z])
+
     def wrap_pi(self, value: float):
         """Normalize the angle to the range [-pi; pi]."""
         if (-math.pi < value) and (value < math.pi):
@@ -119,7 +183,7 @@ class YawController(Node):
         q = msg.pose.pose.orientation
         # convert the quaternion to euler angles
         (roll, pitch, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
-        yaw = self.wrap_pi(yaw)
+        #yaw = self.wrap_pi(yaw)
 
         # publish yaw for debug reasons
         msg_yaw = Float64Stamped()
@@ -127,11 +191,20 @@ class YawController(Node):
         msg_yaw.data = yaw
         self.yaw_pub.publish(msg_yaw)
 
-        control_output = self.compute_control_output(yaw)
+        q = np.array([q.w, q.x, q.y, q.z])
+        control_output = self.compute_control_output(q)
         timestamp = rclpy.time.Time.from_msg(msg.header.stamp) # type: ignore
         self.publish_control_output(control_output, timestamp)
 
-    def compute_control_output(self, yaw):
+    def compute_control_output(self, q: np.ndarray) -> float:
+        """PID-controller
+
+        Args:
+            q (np.ndarray): Quaternion w,x,y,z
+
+        Returns:
+            float: control output
+        """
         now = self.get_clock().now()
         dt = now.nanoseconds * 10e-9 - self.last_time
 
@@ -140,10 +213,12 @@ class YawController(Node):
         # sort out all abnormal dt
         if dt > 1:
             dt = 0.0
-
-        # very important: normalize the angle error!
-        #self.get_logger().info(f"from: {yaw} to: {self.setpoint}")
-        error = self.wrap_pi(self.setpoint - yaw)
+        
+        # difference quaternion
+        q_error = quaternion_product(self.setpoint_q, quaternion_conjugate(q))
+        #self.get_logger().info(f"result: {q_error}")
+        (roll, pitch, yaw) = euler_from_quaternion([q_error[1], q_error[2], q_error[3], q_error[0]])
+        error = yaw
         derivative_error = 0
         
         # derivative
