@@ -17,7 +17,7 @@ class MapperNode(Node):
         super().__init__(node_name='mapper')
 
         # makes the obstacles bigger to account for robot size
-        self.obstacle_distance: float = 0.5
+        self.obstacle_distance: float = 0.8
 
         self.tank_size_x: float = 0
         self.tank_size_y: float = 0
