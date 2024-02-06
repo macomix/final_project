@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
     # pid gains irl
-    gains_x: [1.5, 0.01, 0.0]
-    gains_y: [1.5, 0.01, 0.0]
-    gains_z: [1.5, 0.01, 0.0]
-    gains_yaw: [0.2, 0.01, 0.0]
+    gains_x: [2.0, 0.02, 3.0]
+    gains_y: [2.0, 0.02, 3.0]
+    gains_z: [2.0, 0.02, 3.0]
+    gains_yaw: [0.2, 0.02, 3.0]
     cutoff: 20.0

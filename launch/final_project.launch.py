@@ -30,7 +30,7 @@ def generate_launch_description() -> LaunchDescription:
     # add config files
     package_path = get_package_share_path('final_project')
     mapping_params_file_path = str(package_path / 'config/mapping_params.yaml')
-    pid_params_file_path = str(package_path / 'config/pid_controller_params_sim.yaml')
+    pid_params_file_path = str(package_path / 'config/pid_controller_params.yaml')
 
     # create nodes
     group = GroupAction([
@@ -109,7 +109,7 @@ def generate_launch_description() -> LaunchDescription:
     launch_description.add_action(group)
 
     # add rviz file
-    rviz_file = str(get_package_share_path('final_project') / 'config/rviz_sim.rviz')
+    rviz_file = str(get_package_share_path('final_project') / 'config/rviz.rviz')
 
     action = Node(
         executable='rviz2',

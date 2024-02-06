@@ -67,7 +67,7 @@ class PositionController(Node):
 
         # gain factor
         self.close: bool = False
-        self.close_gain: float = 0.8
+        self.close_gain: float = 0.7
 
         self.integral_threshold: float = 0.2 # in m
         self.output_saturation: float = 1.0
